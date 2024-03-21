@@ -1,0 +1,98 @@
+<!doctype html>
+<html>
+
+<head>
+  <title>BrowserCaptureMediaStreamTrack restrictTo()</title>
+  <link rel="help" href="https://screen-share.github.io/element-capture/">
+</head>
+
+<body>
+  <p class="instructions">
+    When prompted, accept to give permission to use your audio, video devices.
+  </p>
+  <h1 class="instructions">Description</h1>
+  <p class="instructions">
+    This test checks that restricting BrowserCaptureMediaStreamTrack works as
+    expected.
+  </p>
+
+  <button id="button">User gesture</button>
+  <div id='test-div'
+       style="width: 250px; height: 250px; background: cornflowerblue;"></div>
+  <video id="video"
+         style="border: 2px blue dotted; width: 250px; height: 250px;"
+         autoplay="" playsinline="" muted=""></video>
+
+  <script src=/resources/testharness.js></script>
+  <script src=/resources/testharnessreport.js></script>
+  <script src=/resources/testdriver.js></script>
+  <script src=/resources/testdriver-vendor.js></script>
+
+  <script>
+    "use strict";
+
+    const div = document.getElementById('test-div');
+    let seconds = 0;
+    function incrementSeconds() {
+        seconds += 1;
+        div.innerText = seconds;
+    }
+    const cancel = setInterval(incrementSeconds, 1000);
+
+    async function getDisplayMedia() {
+      const p = new Promise(r => button.onclick = r);
+      await test_driver.click(button);
+      await p;
+      return navigator.mediaDevices.getDisplayMedia(
+        {video:{displaySurface:"browser"},
+        selfBrowserSurface:"include"});
+    }
+
+    promise_test(async t => {
+      const stream = await getDisplayMedia();
+      assert_true(stream.active, "stream should be active.");
+      assert_equals(stream.getVideoTracks().length, 1);
+
+      const [videoTrack] = stream.getVideoTracks();
+      assert_true(videoTrack instanceof MediaStreamTrack,
+            "track should be either MediaStreamTrack or a subclass thereof.");
+      assert_equals(videoTrack.readyState, "live", "track should be live.");
+      assert_false(videoTrack.muted, "track should not be muted.");
+
+      // Consume the stream in a video element.
+      const video = document.querySelector('video');
+      video.srcObject = stream;
+
+      assert_true(!!RestrictionTarget, "RestrictionTarget exposed.");
+      assert_true(!!RestrictionTarget.fromElement,
+                  "RestrictionTarget.fromElement exposed.");
+      const restrictionTarget = await RestrictionTarget.fromElement(div);
+
+      assert_true(!!videoTrack.restrictTo, "restrictTo exposed.");
+      assert_true(typeof videoTrack.restrictTo === 'function',
+                  "restrictTo is a function.");
+      await videoTrack.restrictTo(restrictionTarget);
+
+      // Should be paused since the element is not eligible for restriction. It
+      // may take up to 5 seconds for the stream to become muted after no more
+      // frames are produced.
+      await t.step_wait(() => videoTrack.muted,
+                        "video track should become muted.", timeout=10000);
+
+      // Force the DIV into its own stacking context.
+      div.style.isolation = "isolate";
+
+      // Should be unpaused now that the element is eligible.
+      await t.step_wait(() => !videoTrack.muted,
+                        "video track should unmute.", timeout=10000);
+
+      // Should pause if it becomes ineligible again.
+      div.style.isolation = "";
+      await t.step_wait(() => videoTrack.muted,
+                        "video track should mute again.", timeout=10000);
+    }, "Tests that restricting MediaStreamTrack objects works as expected");
+
+  </script>
+</body>
+
+</html>
