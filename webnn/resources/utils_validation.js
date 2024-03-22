@@ -12,6 +12,10 @@ const allWebNNOperandDataTypes = [
   'uint8'
 ];
 
+const floatingPointTypes = ['float32', 'float16'];
+
+const signedIntegerTypes = ['int32', 'int64', 'int8'];
+
 const unsignedLongType = 'unsigned long';
 
 const dimensions0D = [];
@@ -355,6 +359,51 @@ function validateOptionsAxes(operationName, inputRank) {
         }
       }
     }, `[${subOperationName}] DataError is expected if two or more values are same in the axes sequence`);
+  }
+}
+
+/**
+ * Validate a unary operation
+ * @param {String} operationName - An operation name
+ * @param {Array} supportedDataTypes - Test building with these data types
+ *     succeeds and test building with all other data types fails
+ * @param {Boolean} alsoBuildActivation - If test building this operation as an
+ *     activation
+ */
+function validateUnaryOperation(
+    operationName, supportedDataTypes, alsoBuildActivation = false) {
+  if (navigator.ml === undefined) {
+    return;
+  }
+
+  promise_test(async t => {
+    for (let dataType of supportedDataTypes) {
+      for (let dimensions of allWebNNDimensionsArray) {
+        const input = builder.input(`input`, {dataType, dimensions});
+        const output = builder[operationName](input);
+        assert_equals(output.dataType(), dataType);
+        assert_array_equals(output.shape(), dimensions);
+      }
+    }
+  }, `[${operationName}] Test building an operator`);
+
+  const unsupportedDataTypes =
+      new Set(allWebNNOperandDataTypes).difference(new Set(supportedDataTypes));
+  if (unsupportedDataTypes.size != 0) {
+    promise_test(async t => {
+      for (let dataType of unsupportedDataTypes) {
+        for (let dimensions of allWebNNDimensionsArray) {
+          const input = builder.input(`input`, {dataType, dimensions});
+          assert_throws_js(TypeError, () => builder[operationName](input));
+        }
+      }
+    }, `[${operationName}] Throw if the data type is not supported`);
+  }
+
+  if (alsoBuildActivation) {
+    promise_test(async t => {
+      builder[operationName]();
+    }, `[${operationName}] Test building an activation`);
   }
 }
 
