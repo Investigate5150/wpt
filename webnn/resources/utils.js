@@ -931,6 +931,7 @@ const toHalf = (value) => {
  * WebNN buffer creation.
  * @param {MLContext} context - the context used to create the buffer.
  * @param {Number} bufferSize - Size of the buffer to create, in bytes.
+ * @returns {MLBuffer} the created buffer.
  */
 const createBuffer = (context, bufferSize) => {
   let buffer;
@@ -980,4 +981,181 @@ const testCreateWebNNBuffer = (testName, bufferSize, deviceType = 'cpu') => {
   promise_test(async () => {
     createBuffer(context, bufferSize);
   }, `${testName} / ${bufferSize}`);
+};
+
+/**
+ * Asserts the buffer data in MLBuffer matches expected.
+ * @param {MLContext} ml_context - The context used to create the buffer.
+ * @param {MLBuffer} ml_buffer - The buffer to read and compare data.
+ * @param {Array} expected - Array of the expected data in the buffer.
+ */
+const assert_buffer_data_equals = async (ml_context, ml_buffer, expected) => {
+  const actual = await ml_context.readBuffer(ml_buffer);
+  assert_array_equals(new expected.constructor(actual), expected, "Read buffer data equals expected data.");
+};
+
+/**
+ * Helper to construct an array buffer view with data.
+ * @param {ArrayBuffer} array_buffer - The array buffer to create a view from.
+ * @param {Array} array_data - The byte array used to initialize the view.
+ * @return {Uint8Array} - Array view to return of type.
+ */
+const create_array_view = (array_buffer, array_data) => {
+  let array_buffer_view = new Uint8Array(array_buffer);
+  array_buffer_view.set(array_data);
+  return array_buffer_view;
+}
+
+/**
+ * WebNN write buffer operation test.
+ * @param {String} testName - The name of the test operation.
+ * @param {String} deviceType - The execution device type for this test.
+ */
+const testWriteWebNNBuffer = (testName, deviceType = 'cpu') => {
+  let ml_context;
+  promise_setup(async () => {
+    ml_context = await navigator.ml.createContext({deviceType});
+  });
+
+  promise_test(async () => {
+    let ml_buffer = createBuffer(ml_context, 4);
+
+    // MLBuffer was unsupported for the deviceType.
+    if (ml_buffer === undefined){
+      return;
+    }
+
+    let array_buffer = new ArrayBuffer(4);
+
+    // Writing the full buffer.
+    let input_data = [0xAA, 0xAA, 0xAA, 0xAA];
+    ml_context.writeBuffer(ml_buffer, create_array_view(array_buffer, input_data));
+    assert_buffer_data_equals(ml_context, ml_buffer, Uint8Array.from(input_data));
+
+    ml_context.writeBuffer(ml_buffer, new Uint32Array(array_buffer));
+    assert_buffer_data_equals(ml_context, ml_buffer, Uint32Array.from(input_data));
+
+    // Writing to the remainder of the buffer from source offset.
+    ml_context.writeBuffer(ml_buffer, create_array_view(array_buffer, [0xAA, 0xAA, 0xBB, 0xBB]), /*srcOffset=*/2);
+
+    // Writing zero bytes at the end of the buffer.
+    ml_context.writeBuffer(ml_buffer, new Uint32Array(array_buffer), /*srcOffset=*/1);
+
+    assert_buffer_data_equals(ml_context, ml_buffer, Uint8Array.from([0xBB, 0xBB, 0xAA, 0xAA]));
+
+    // Writing with both a source offset and size.
+    ml_context.writeBuffer(ml_buffer, create_array_view(array_buffer, [0xDD, 0xDD, 0xCC, 0xDD]), /*srcOffset=*/2, /*srcSize=*/1);
+    assert_buffer_data_equals(ml_context, ml_buffer, Uint8Array.from([0xCC, 0xBB, 0xAA, 0xAA]));
+
+    // Writing from a larger source buffer that allows it to fit in the buffer.
+    ml_context.writeBuffer(ml_buffer, Uint8Array.from([0xAA, 0xBB, 0xCC, 0xDD, 0xEE]));
+    assert_buffer_data_equals(ml_context, ml_buffer, Uint8Array.from([0xAA, 0xBB, 0xCC, 0xDD]));
+
+    // Writing with a size that goes past that source buffer length.
+    assert_throws_js(TypeError, () => ml_context.writeBuffer(ml_buffer, new Uint8Array(array_buffer), /*srcOffset=*/0, /*srcSize=*/input_data.length + 1));
+    assert_throws_js(TypeError, () => ml_context.writeBuffer(ml_buffer, new Uint8Array(array_buffer), /*srcOffset=*/3, /*srcSize=*/4));
+
+    // Writing with a source offset that is out of range of the source size.
+    assert_throws_js(TypeError, () => ml_context.writeBuffer(ml_buffer, new Uint8Array(array_buffer), /*srcOffset=*/input_data.length + 1));
+
+    // Writing with a source offset that is out of range of implicit copy size.
+    assert_throws_js(TypeError, () => ml_context.writeBuffer(ml_buffer, new Uint8Array(array_buffer), /*srcOffset=*/input_data.length + 1, /*srcSize=*/undefined));
+
+    // Writing with a source offset of undefined should be treated as 0.
+    ml_context.writeBuffer(ml_buffer, new Uint8Array(array_buffer), /*srcOffset=*/undefined, /*srcSize=*/input_data.length);
+    assert_buffer_data_equals(ml_context, ml_buffer, Uint8Array.from(input_data));
+
+    assert_throws_js(TypeError, () => ml_context.writeBuffer(ml_buffer, new Uint8Array(array_buffer), /*srcOffset=*/undefined, /*srcSize=*/input_data.length + 1));
+
+  }, `${testName}`);
+
+  promise_test(async () => {
+    let ml_buffer = createBuffer(ml_context, 4);
+
+    // MLBuffer was unsupported for the deviceType.
+    if (ml_buffer === undefined){
+      return;
+    }
+
+    // Writing data to a destroyed MLBuffer should throw.
+    ml_buffer.destroy();
+
+    assert_throws_dom("InvalidStateError", () => ml_context.writeBuffer(ml_buffer, new Uint8Array(ml_buffer.size)));
+
+  }, `${testName} / destroy`);
+
+  promise_test(async () => {
+    let ml_buffer = createBuffer(ml_context, 4);
+
+    // MLBuffer was unsupported for the deviceType.
+    if (ml_buffer === undefined){
+      return;
+    }
+
+    let another_ml_context = await navigator.ml.createContext({deviceType});
+    let another_ml_buffer = createBuffer(another_ml_context, ml_buffer.size);
+
+    let input_data = new Uint8Array(ml_buffer.size).fill(0xAA);
+    assert_throws_js(TypeError, () => ml_context.writeBuffer(another_ml_buffer, input_data));
+    assert_throws_js(TypeError, () => another_ml_context.writeBuffer(ml_buffer, input_data));
+
+  }, `${testName} / context_mismatch`);
+
+  promise_test(async () => {
+    let ml_buffer = createBuffer(ml_context, 4);
+
+    // MLBuffer was unsupported for the deviceType.
+    if (ml_buffer === undefined){
+      return;
+    }
+
+    const array_buffer = new ArrayBuffer(ml_buffer.size);
+    const detached_buffer = array_buffer.transfer();
+    assert_true(array_buffer.detached, "array buffer should be detached.");
+
+    ml_context.writeBuffer(ml_buffer, array_buffer);
+
+  }, `${testName} / detached`);
+};
+
+/**
+ * WebNN read buffer operation test.
+ * @param {String} testName - The name of the test operation.
+ * @param {String} deviceType - The execution device type for this test.
+ */
+const testReadWebNNBuffer = (testName, deviceType = 'cpu') => {
+  let ml_context;
+  promise_setup(async () => {
+    ml_context = await navigator.ml.createContext({deviceType});
+  });
+
+  promise_test(async t => {
+    let ml_buffer = createBuffer(ml_context, 4);
+
+    // MLBuffer was unsupported for the deviceType.
+    if (ml_buffer === undefined){
+      return;
+    }
+
+    // Reading a destroyed MLBuffer should reject.
+    ml_buffer.destroy();
+
+    promise_rejects_dom(t, "InvalidStateError", ml_context.readBuffer(ml_buffer));
+  }, `${testName} / destroy`);
+
+  promise_test(async t => {
+    let ml_buffer = createBuffer(ml_context, 4);
+
+    // MLBuffer was unsupported for the deviceType.
+    if (ml_buffer === undefined){
+      return;
+    }
+
+    let another_ml_context = await navigator.ml.createContext({deviceType});
+    let another_ml_buffer = createBuffer(another_ml_context, ml_buffer.size);
+
+    promise_rejects_js(t, TypeError, ml_context.readBuffer(another_ml_buffer));
+    promise_rejects_js(t, TypeError, another_ml_context.readBuffer(ml_buffer));
+
+  }, `${testName} / context_mismatch`);
 };
